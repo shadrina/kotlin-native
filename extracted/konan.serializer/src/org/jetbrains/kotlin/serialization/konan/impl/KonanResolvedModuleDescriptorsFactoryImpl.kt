@@ -1,5 +1,6 @@
 package org.jetbrains.kotlin.serialization.konan.impl
 
+import org.jetbrains.kotlin.backend.common.serialization.metadata.PackageAccessedHandler
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
 import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.descriptors.*

@@ -17,10 +17,7 @@
 package org.jetbrains.kotlin.backend.konan.serialization
 
 import org.jetbrains.kotlin.backend.common.LoggingContext
-import org.jetbrains.kotlin.backend.common.serialization.DescriptorUniqIdAware
-import org.jetbrains.kotlin.backend.common.serialization.KotlinIrLinker
-import org.jetbrains.kotlin.backend.common.serialization.UniqId
-import org.jetbrains.kotlin.backend.common.serialization.UniqIdKey
+import org.jetbrains.kotlin.backend.common.serialization.*
 import org.jetbrains.kotlin.backend.konan.descriptors.konanLibrary
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.ir.declarations.IrFile
@@ -36,7 +33,7 @@ class KonanIrLinker(
     forwardModuleDescriptor: ModuleDescriptor?,
     exportedDependencies: List<ModuleDescriptor>
 ) : KotlinIrLinker(logger, builtIns, symbolTable, exportedDependencies, forwardModuleDescriptor, 0L),
-    DescriptorUniqIdAware by KonanDescriptorUniqIdAware {
+    DescriptorUniqIdAware by DeserializedDescriptorUniqIdAware {
 
     override val descriptorReferenceDeserializer =
         KonanDescriptorReferenceDeserializer(currentModule, resolvedForwardDeclarations)
