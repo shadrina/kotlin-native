@@ -5,9 +5,7 @@
 package org.jetbrains.kotlin.native.interop.gen
 
 import org.jetbrains.kotlin.native.interop.gen.jvm.KotlinPlatform
-import org.jetbrains.kotlin.native.interop.indexer.ObjCProtocol
-import org.jetbrains.kotlin.native.interop.indexer.VoidType
-import org.jetbrains.kotlin.native.interop.indexer.unwrapTypedefs
+import org.jetbrains.kotlin.native.interop.indexer.*
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 
 class BridgeBuilderResult(
@@ -114,7 +112,7 @@ class StubIrBridgeBuilder(
             val cCallAnnotation = function.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>()
                     ?: return
             val cCallSymbolName = cCallAnnotation.symbolName
-            val (wrapperName, wrapperLines) = generateCCalleeWrapper(origin)
+            val (wrapperName, wrapperLines) = generateCCalleeWrapper(origin.function)
             simpleBridgeGenerator.insertNativeBridge(
                     function,
                     emptyList(),
@@ -130,11 +128,10 @@ class StubIrBridgeBuilder(
          * Some functions don't have an address (e.g. macros-based or builtins).
          * To solve this problem we generate a wrapper function.
          */
-        private fun generateCCalleeWrapper(origin: StubOrigin.Function): CCalleeWrapper =
-                if (origin.function.isVararg) {
-                    CCalleeWrapper(origin.function.name, emptyList())
+        private fun generateCCalleeWrapper(function: FunctionDecl): CCalleeWrapper =
+                if (function.isVararg) {
+                    CCalleeWrapper(function.name, emptyList())
                 } else {
-                    val function = origin.function
                     val wrapperName = generateFunctionWrapperName(function.name)
 
                     val returnType = function.returnType.getStringRepresentation()
@@ -150,12 +147,46 @@ class StubIrBridgeBuilder(
 
                     val alwaysInline = "__attribute__((always_inline))"
                     val lines = listOf(
-                            "$alwaysInline $returnType $wrapperName(${parameters.joinToString { "${it.second} ${it.first}" }}) {",
+                            alwaysInline,
+                            "$returnType $wrapperName(${parameters.joinToString { "${it.second} ${it.first}" }}) {",
                             wrapperBody,
                             "}"
                     )
                     CCalleeWrapper(wrapperName, lines)
                 }
+
+        private fun generateCGlobalGetter(getterInfo: BridgeGenerationComponents.GlobalGetterBridgeInfo): CCalleeWrapper {
+            val wrapperName = generateFunctionWrapperName("${getterInfo.cGlobalName}_getter")
+
+            val returnType = getterInfo.typeInfo.bridgedType.getNativeType(context.platform)
+            val wrapperBody = "return ${getterInfo.cGlobalName};"
+
+            val alwaysInline = "__attribute__((always_inline))"
+            val lines = listOf(
+                    alwaysInline,
+                    "$returnType $wrapperName() {",
+                    wrapperBody,
+                    "}"
+            )
+            return CCalleeWrapper(wrapperName, lines)
+        }
+
+        private fun generateCGlobalSetter(setterInfo: BridgeGenerationComponents.GlobalSetterBridgeInfo): CCalleeWrapper {
+            val wrapperName = generateFunctionWrapperName("${setterInfo.cGlobalName}_setter")
+
+            val wrapperBody = "${setterInfo.cGlobalName} = p1;"
+
+            val globalType = setterInfo.typeInfo.bridgedType.getNativeType(context.platform)
+
+            val alwaysInline = "__attribute__((always_inline))"
+            val lines = listOf(
+                    alwaysInline,
+                    "void $wrapperName($globalType p1) {",
+                    wrapperBody,
+                    "}"
+            )
+            return CCalleeWrapper(wrapperName, lines)
+        }
 
         override fun visitProperty(element: PropertyStub, owner: StubContainer?) {
             try {
@@ -241,6 +272,42 @@ class StubIrBridgeBuilder(
                 is PropertyAccessor.Getter.InterpretPointed -> {
                     val getAddressExpression = getGlobalAddressExpression(accessor.cGlobalName, accessor)
                     propertyAccessorBridgeBodies[accessor] = getAddressExpression
+                }
+
+                is PropertyAccessor.Getter.ExternalGetter -> {
+                    if (accessor in builderResult.bridgeGenerationComponents.getterToBridgeInfo) {
+                        val extra = builderResult.bridgeGenerationComponents.getterToBridgeInfo.getValue(accessor)
+                        val cCallAnnotation = accessor.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>() ?: return // TODO: Error?
+                        val cGetterName = cCallAnnotation.symbolName
+                        val (wrapperName, wrapperLines) = generateCGlobalGetter(extra)
+                        simpleBridgeGenerator.insertNativeBridge(
+                                accessor,
+                                emptyList(),
+                                listOf(
+                                        *wrapperLines.toTypedArray(),
+                                        "const void* $cGetterName __asm(${cGetterName.quoteAsKotlinLiteral()});",
+                                        "const void* $cGetterName = &$wrapperName;"
+                                )
+                        )
+                    }
+                }
+
+                is PropertyAccessor.Setter.ExternalSetter -> {
+                    if (accessor in builderResult.bridgeGenerationComponents.setterToBridgeInfo) {
+                        val extra = builderResult.bridgeGenerationComponents.setterToBridgeInfo.getValue(accessor)
+                        val cCallAnnotation = accessor.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>() ?: return // TODO: Error?
+                        val cGetterName = cCallAnnotation.symbolName
+                        val (wrapperName, wrapperLines) = generateCGlobalSetter(extra)
+                        simpleBridgeGenerator.insertNativeBridge(
+                                accessor,
+                                emptyList(),
+                                listOf(
+                                        *wrapperLines.toTypedArray(),
+                                        "const void* $cGetterName __asm(${cGetterName.quoteAsKotlinLiteral()});",
+                                        "const void* $cGetterName = &$wrapperName;"
+                                )
+                        )
+                    }
                 }
             }
         }
