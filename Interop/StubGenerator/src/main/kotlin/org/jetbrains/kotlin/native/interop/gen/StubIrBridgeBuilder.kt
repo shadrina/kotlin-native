@@ -19,6 +19,78 @@ class BridgeBuilderResult(
 private data class CCalleeWrapper(val name: String, val lines: List<String>)
 
 /**
+ * Some functions don't have an address (e.g. macros-based or builtins).
+ * To solve this problem we generate a wrapper function.
+ */
+private class CWrappersGenerator(private val context: StubIrContext) {
+
+    private var currentFunctionWrapperId = 0
+
+    private fun generateFunctionWrapperName(functionName: String) =
+            "${functionName}_wrapper${currentFunctionWrapperId++}"
+
+    fun generateCCalleeWrapper(function: FunctionDecl): CCalleeWrapper =
+            if (function.isVararg) {
+                CCalleeWrapper(function.name, emptyList())
+            } else {
+                val wrapperName = generateFunctionWrapperName(function.name)
+
+                val returnType = function.returnType.getStringRepresentation()
+                val parameters = function.parameters.mapIndexed { index, parameter ->
+                    "p$index" to parameter.type.getStringRepresentation()
+                }
+                val callExpression = "${function.name}(${parameters.joinToString { it.first }});"
+                val wrapperBody = if (function.returnType.unwrapTypedefs() is VoidType) {
+                    callExpression
+                } else {
+                    "return $callExpression"
+                }
+
+                val alwaysInline = "__attribute__((always_inline))"
+                val lines = listOf(
+                        alwaysInline,
+                        "$returnType $wrapperName(${parameters.joinToString { "${it.second} ${it.first}" }}) {",
+                        wrapperBody,
+                        "}"
+                )
+                CCalleeWrapper(wrapperName, lines)
+            }
+
+    fun generateCGlobalGetter(getterInfo: BridgeGenerationComponents.GlobalGetterBridgeInfo): CCalleeWrapper {
+        val wrapperName = generateFunctionWrapperName("${getterInfo.cGlobalName}_getter")
+
+        val returnType = getterInfo.typeInfo.bridgedType.getNativeType(context.platform)
+        val wrapperBody = "return ${getterInfo.cGlobalName};"
+
+        val alwaysInline = "__attribute__((always_inline))"
+        val lines = listOf(
+                alwaysInline,
+                "$returnType $wrapperName() {",
+                wrapperBody,
+                "}"
+        )
+        return CCalleeWrapper(wrapperName, lines)
+    }
+
+    fun generateCGlobalSetter(setterInfo: BridgeGenerationComponents.GlobalSetterBridgeInfo): CCalleeWrapper {
+        val wrapperName = generateFunctionWrapperName("${setterInfo.cGlobalName}_setter")
+
+        val wrapperBody = "${setterInfo.cGlobalName} = p1;"
+
+        val globalType = setterInfo.typeInfo.bridgedType.getNativeType(context.platform)
+
+        val alwaysInline = "__attribute__((always_inline))"
+        val lines = listOf(
+                alwaysInline,
+                "void $wrapperName($globalType p1) {",
+                wrapperBody,
+                "}"
+        )
+        return CCalleeWrapper(wrapperName, lines)
+    }
+}
+
+/**
  * Generates [NativeBridges] and corresponding function bodies and property accessors.
  */
 class StubIrBridgeBuilder(
@@ -26,6 +98,8 @@ class StubIrBridgeBuilder(
         private val builderResult: StubIrBuilderResult) {
 
     private val globalAddressExpressions = mutableMapOf<Pair<String, PropertyAccessor>, KotlinExpression>()
+
+    private val wrapperGenerator = CWrappersGenerator(context)
 
     private fun getGlobalAddressExpression(cGlobalName: String, accessor: PropertyAccessor) =
             globalAddressExpressions.getOrPut(Pair(cGlobalName, accessor)) {
@@ -71,11 +145,6 @@ class StubIrBridgeBuilder(
 
     private val bridgeGeneratingVisitor = object : StubIrVisitor<StubContainer?, Unit> {
 
-        private var currentFunctionWrapperId = 0
-
-        private fun generateFunctionWrapperName(functionName: String) =
-                "${functionName}_wrapper${currentFunctionWrapperId++}"
-
         override fun visitClass(element: ClassStub, owner: StubContainer?) {
             element.annotations.filterIsInstance<AnnotationStub.ObjC.ExternalClass>().firstOrNull()?.let {
                 if (it.protocolGetter.isNotEmpty() && element.origin is StubOrigin.ObjCProtocol) {
@@ -112,7 +181,7 @@ class StubIrBridgeBuilder(
             val cCallAnnotation = function.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>()
                     ?: return
             val cCallSymbolName = cCallAnnotation.symbolName
-            val (wrapperName, wrapperLines) = generateCCalleeWrapper(origin.function)
+            val (wrapperName, wrapperLines) = wrapperGenerator.generateCCalleeWrapper(origin.function)
             simpleBridgeGenerator.insertNativeBridge(
                     function,
                     emptyList(),
@@ -122,70 +191,6 @@ class StubIrBridgeBuilder(
                         "const void* $cCallSymbolName = &$wrapperName;"
                     )
             )
-        }
-
-        /**
-         * Some functions don't have an address (e.g. macros-based or builtins).
-         * To solve this problem we generate a wrapper function.
-         */
-        private fun generateCCalleeWrapper(function: FunctionDecl): CCalleeWrapper =
-                if (function.isVararg) {
-                    CCalleeWrapper(function.name, emptyList())
-                } else {
-                    val wrapperName = generateFunctionWrapperName(function.name)
-
-                    val returnType = function.returnType.getStringRepresentation()
-                    val parameters = function.parameters.mapIndexed { index, parameter ->
-                        "p$index" to parameter.type.getStringRepresentation()
-                    }
-                    val callExpression = "${function.name}(${parameters.joinToString { it.first }});"
-                    val wrapperBody = if (function.returnType.unwrapTypedefs() is VoidType) {
-                        callExpression
-                    } else {
-                        "return $callExpression"
-                    }
-
-                    val alwaysInline = "__attribute__((always_inline))"
-                    val lines = listOf(
-                            alwaysInline,
-                            "$returnType $wrapperName(${parameters.joinToString { "${it.second} ${it.first}" }}) {",
-                            wrapperBody,
-                            "}"
-                    )
-                    CCalleeWrapper(wrapperName, lines)
-                }
-
-        private fun generateCGlobalGetter(getterInfo: BridgeGenerationComponents.GlobalGetterBridgeInfo): CCalleeWrapper {
-            val wrapperName = generateFunctionWrapperName("${getterInfo.cGlobalName}_getter")
-
-            val returnType = getterInfo.typeInfo.bridgedType.getNativeType(context.platform)
-            val wrapperBody = "return ${getterInfo.cGlobalName};"
-
-            val alwaysInline = "__attribute__((always_inline))"
-            val lines = listOf(
-                    alwaysInline,
-                    "$returnType $wrapperName() {",
-                    wrapperBody,
-                    "}"
-            )
-            return CCalleeWrapper(wrapperName, lines)
-        }
-
-        private fun generateCGlobalSetter(setterInfo: BridgeGenerationComponents.GlobalSetterBridgeInfo): CCalleeWrapper {
-            val wrapperName = generateFunctionWrapperName("${setterInfo.cGlobalName}_setter")
-
-            val wrapperBody = "${setterInfo.cGlobalName} = p1;"
-
-            val globalType = setterInfo.typeInfo.bridgedType.getNativeType(context.platform)
-
-            val alwaysInline = "__attribute__((always_inline))"
-            val lines = listOf(
-                    alwaysInline,
-                    "void $wrapperName($globalType p1) {",
-                    wrapperBody,
-                    "}"
-            )
-            return CCalleeWrapper(wrapperName, lines)
         }
 
         override fun visitProperty(element: PropertyStub, owner: StubContainer?) {
@@ -279,7 +284,7 @@ class StubIrBridgeBuilder(
                         val extra = builderResult.bridgeGenerationComponents.getterToBridgeInfo.getValue(accessor)
                         val cCallAnnotation = accessor.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>() ?: return // TODO: Error?
                         val cGetterName = cCallAnnotation.symbolName
-                        val (wrapperName, wrapperLines) = generateCGlobalGetter(extra)
+                        val (wrapperName, wrapperLines) = wrapperGenerator.generateCGlobalGetter(extra)
                         simpleBridgeGenerator.insertNativeBridge(
                                 accessor,
                                 emptyList(),
@@ -297,7 +302,7 @@ class StubIrBridgeBuilder(
                         val extra = builderResult.bridgeGenerationComponents.setterToBridgeInfo.getValue(accessor)
                         val cCallAnnotation = accessor.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>() ?: return // TODO: Error?
                         val cGetterName = cCallAnnotation.symbolName
-                        val (wrapperName, wrapperLines) = generateCGlobalSetter(extra)
+                        val (wrapperName, wrapperLines) = wrapperGenerator.generateCGlobalSetter(extra)
                         simpleBridgeGenerator.insertNativeBridge(
                                 accessor,
                                 emptyList(),
