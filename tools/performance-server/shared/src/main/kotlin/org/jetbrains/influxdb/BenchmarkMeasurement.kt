@@ -2,6 +2,7 @@ package org.jetbrains.influxdb
 
 import org.jetbrains.report.*
 import org.jetbrains.report.json.*
+import kotlin.js.Date
 
 data class Commit(val revision: String, val developer: String) {
     override fun toString() = "$revision by $developer"
@@ -82,17 +83,18 @@ class GoldenResultMeasurement(name: String = "", metric: String = "", score: Dou
 }
 
 fun List<BenchmarkMeasurement>.toReport(): BenchmarksReport? {
-    return this.firstOrNull()?. let {
+    return this.firstOrNull()?. let { firstPoint ->
         // Create common part of report.
-        val machine = Environment.Machine(it.envMachineCpu!!, it.envMachineOs!!)
-        val jdk = Environment.JDKInstance(it.envJDKVersion!!.value, it.envJDKVendor!!.value)
+        val machine = Environment.Machine(firstPoint.envMachineCpu!!, firstPoint.envMachineOs!!)
+        val jdk = Environment.JDKInstance(firstPoint.envJDKVersion!!.value, firstPoint.envJDKVendor!!.value)
         val environment = Environment(machine, jdk)
-        val backend = Compiler.Backend(Compiler.backendTypeFromString(it.kotlinBackendType!!)!!,
-                it.kotlinBackendVersion!!.value, it.kotlinBackendFlags!!)
-        val compiler = Compiler(backend, it.kotlinVersion!!.value)
-        val benchmarksList = this.map {
-            BenchmarkResult(it.benchmarkName!!, BenchmarkResult.statusFromString(it.benchmarkStatus!!.value)!!,
-                    it.benchmarkScore!!.value, BenchmarkResult.metricFromString(it.benchmarkMetric!!)!!,
+        val backend = Compiler.Backend(Compiler.backendTypeFromString(firstPoint.kotlinBackendType!!)!!,
+                firstPoint.kotlinBackendVersion!!.value, firstPoint.kotlinBackendFlags!!)
+        val compiler = Compiler(backend, firstPoint.kotlinVersion!!.value)
+        val benchmarksList = map {
+            val metric = BenchmarkResult.metricFromString(it.benchmarkMetric!!)!!
+            BenchmarkResult(it.benchmarkName!! + metric.suffix, BenchmarkResult.statusFromString(it.benchmarkStatus!!.value)!!,
+                    it.benchmarkScore!!.value, metric,
                     it.benchmarkRuntime!!.value, it.benchmarkRepeat!!.value, it.benchmarkWarmup!!.value)
         }
         BenchmarksReport(environment, benchmarksList, compiler)
@@ -175,7 +177,7 @@ class BenchmarkMeasurement : Measurement("benchmarks") {
                 }
                 val kotlinVersion = elementToString(compiler.getRequiredField("kotlinVersion"), "kotlinVersion")
                 if (benchmarksObj is JsonArray) {
-                    benchmarksObj.jsonArray.map {
+                    benchmarksObj.jsonArray.forEach {
                         if (it is JsonObject) {
                             val name = elementToString(it.getRequiredField("name"), "name")
                             val metricElement = it.getOptionalField("metric")
@@ -208,6 +210,7 @@ class BenchmarkMeasurement : Measurement("benchmarks") {
                                 point.benchmarkRuntime = FieldType.InfluxFloat(runtimeInUs)
                                 point.benchmarkRepeat = FieldType.InfluxInt(repeat)
                                 point.benchmarkWarmup = FieldType.InfluxInt(warmup)
+                                point.timestamp = Date.now().toLong() * 1000 + repeat // TODO multiplatform. Hack to make unique timestamp.
                                 points.add(point)
                             } else {
                                 error("Status should be string literal.")
@@ -227,7 +230,6 @@ class BenchmarkMeasurement : Measurement("benchmarks") {
     }
 
     override fun fromInfluxJson(data: JsonElement): List<Measurement> {
-        println("AAAAAAAAA")
         val points = mutableListOf<BenchmarkMeasurement>()
         var columnsIndexes: Map<String, Int>
         if (data is JsonObject) {
@@ -242,8 +244,8 @@ class BenchmarkMeasurement : Measurement("benchmarks") {
                                 (it as JsonLiteral).unquoted() to index
                             }.toMap()
                             val valuesArrays = it.getRequiredField("values") as JsonArray
-                            val point = BenchmarkMeasurement()
                             valuesArrays.forEach {
+                                val point = BenchmarkMeasurement()
                                 val values = it as JsonArray
                                 point.envMachineCpu = (values[columnsIndexes["environment.machine.cpu"]!!] as JsonLiteral)
                                         .unquoted()
@@ -272,6 +274,7 @@ class BenchmarkMeasurement : Measurement("benchmarks") {
                                 point.benchmarkMetric = (values[columnsIndexes["benchmark.metric"]!!] as JsonLiteral).unquoted()
                                 point.benchmarkRuntime = FieldType.InfluxFloat(
                                         (values[columnsIndexes["benchmark.runtimeInUs"]!!] as JsonLiteral).double)
+
                                 point.benchmarkRepeat = FieldType.InfluxInt(
                                         (values[columnsIndexes["benchmark.repeat"]!!] as JsonLiteral).int)
                                 point.benchmarkWarmup = FieldType.InfluxInt(
@@ -283,7 +286,6 @@ class BenchmarkMeasurement : Measurement("benchmarks") {
                 }
             }
         }
-
         return points
     }
     

@@ -25,7 +25,6 @@ object InfluxDBConnector {
         checkConnection()
 
         val queryUrl = "$host:$port/query?db=$databaseName&q=$query"
-        println("In query $queryUrl")
         return sendRequest(RequestMethod.GET, queryUrl, user, password, true)
     }
 
@@ -44,7 +43,6 @@ object InfluxDBConnector {
 
     inline fun <reified T: Any>selectQuery(query: String, measurement: Measurement? = null): Promise<List<T>> {
         return query(query).then { response ->
-            println(response)
             // Parse response.
             if (measurement is T) {
                 // Request objects.
@@ -60,7 +58,6 @@ object InfluxDBConnector {
 
     fun select(columns: Expression<String>, from: Expression<String>, where: WhereExpression? = null): Promise<List<String>> {
         val query = "SELECT ${columns.lineProtocol()} FROM (${from.lineProtocol()}) ${where?.lineProtocol() ?: ""}"
-        println(query)
         return selectQuery<String>(query)
     }
 
@@ -86,18 +83,22 @@ object InfluxDBConnector {
         return points
     }
 
-    fun insert(points: Collection<Measurement>): Promise<String> {
+    fun insert(points: Collection<Measurement>): Array<Promise<String>> {
         checkConnection()
-        val description  = with(StringBuilder()) {
-            var prefix = ""
-            points.forEach {
-                append("${prefix}${it.lineProtocol()}")
-                prefix = "\n"
+        // InfluxDb has limitations to 5,000 points in one request.
+        val insertLimit = 5000
+        return points.chunked(insertLimit).map {
+            val description = with(StringBuilder()) {
+                var prefix = ""
+                it.forEach {
+                    append("${prefix}${it.lineProtocol()}")
+                    prefix = "\n"
+                }
+                toString()
             }
-            toString()
-        }
-        val writeUrl = "$host:$port/write?db=$databaseName"
-        return sendRequest(RequestMethod.POST, writeUrl, user, password, body = description)
+            val writeUrl = "$host:$port/write?db=$databaseName"
+            sendRequest(RequestMethod.POST, writeUrl, user, password, body = description)
+        }.toTypedArray()
     }
 }
 
@@ -112,7 +113,7 @@ sealed class FieldType<T : Any>(val value: T) {
 }
 
 abstract class Measurement(val name: String) {
-    var timestamp: ULong? = null
+    var timestamp: Long? = null
         protected set
     val fields = mutableMapOf<String, ColumnEntity.FieldEntity<FieldType<*>>>()
     val tags = mutableMapOf<String, ColumnEntity.TagEntity<*>>()
@@ -173,7 +174,6 @@ abstract class Measurement(val name: String) {
 
     inline fun <reified T: Any>select(columns: Expression<T>, where: WhereExpression? = null): Promise<List<T>> {
         val query = "SELECT ${columns.lineProtocol()} FROM \"$name\" ${where?.lineProtocol() ?: ""}"
-        println(query)
         return InfluxDBConnector.selectQuery<T>(query, this)
     }
 

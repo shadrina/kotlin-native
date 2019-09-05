@@ -21,6 +21,8 @@ import kotlin.js.Promise
 import org.jetbrains.report.json.*
 import org.jetbrains.influxdb.*
 import org.jetbrains.build.Build
+import org.jetbrains.analyzer.*
+import org.jetbrains.report.*
 
 const val teamCityUrl = "https://buildserver.labs.intellij.net/app/rest"
 const val downloadBintrayUrl = "https://dl.bintray.com/content/lepilkinaelena/KotlinNativePerformance"
@@ -114,6 +116,13 @@ fun buildDescriptionToTokens(buildDescription: String): List<String> {
     return tokens
 }
 
+val <T> T?.nullable : T?
+    get() = when(this) {
+        null -> null
+        undefined -> null
+        else -> this
+    }
+
 // Routing of requests to current server.
 fun router() {
     val express = require("express")
@@ -135,9 +144,8 @@ fun router() {
                     val results = BenchmarkMeasurement.create(JsonTreeParser.parse(resultsContent),
                             BuildInfo(buildInfo.buildNumber, buildInfo.startTime, buildInfo.finishTime,
                                     commitsList, buildInfo.branch))
-                    println("Get results")
                     // Save results in database.
-                    InfluxDBConnector.insert(results).then { _ ->
+                    Promise.all(InfluxDBConnector.insert(results)).then { _ ->
                         response.sendStatus(200)
                     }.catch {
                         response.sendStatus(400)
@@ -153,7 +161,7 @@ fun router() {
         val resultPoints = goldenResultsInfo.goldenResults.map {
             GoldenResultMeasurement(it.benchmarkName, it.metric, it.value)
         }
-        InfluxDBConnector.insert(resultPoints).then { _ ->
+        Promise.all(InfluxDBConnector.insert(resultPoints)).then { _ ->
             response.sendStatus(200)
         }.catch {
             response.sendStatus(400)
@@ -171,11 +179,27 @@ fun router() {
         response.json(prepareBuildsResponse(builds, request.params.type, request.params.branch))
     })*/
 
+
+
     router.get("/metricValue/:target/:type/:branch/:metric", { request, response ->
         val measurement = BenchmarkMeasurement()
-        val samples = request.query?.samples.toString().split(",").map { it.trim() }
-        val agregation = request.query?.agr.toString() ?: "geomean"
         val metric = request.params.metric
+        val target = request.params.target.toString().replace('_', ' ').asDynamic()
+        var samples:List<String>? = null
+        var agregation = "geomean"
+        var normalize = false
+
+        if(request.query != undefined) {
+            if (request.query.samples != undefined) {
+                samples = request.query.samples.toString()?.split(",")?.map { it.trim() }
+            }
+            if (request.query.agr != undefined) {
+                agregation = request.query.agr.toString()
+            }
+            if (request.query.normalize != undefined) {
+                normalize = true
+            }
+        }
 
         // Get golden results.
         val golden = GoldenResultMeasurement()
@@ -189,43 +213,55 @@ fun router() {
 
         val buildsNumbers = InfluxDBConnector.select(measurement.distinct("build.number"),
                 measurement.field("build.number")
-                        .select((measurement.tag("environment.machine.os") eq request.params.target) and
+                        .select((measurement.tag("environment.machine.os") eq target) and
                                 /*(measurement.field("build.number") match ".+-${request.params.type}-.+") and*/
                                 (measurement.field("build.branch") eq FieldType.InfluxString("${request.params.branch}")))).then { dbResponse ->
-            dbResponse.toString().replace("\\[|\\]".toRegex(), "").split(",")
+            dbResponse.toString().replace("\\[|\\]| ".toRegex(), "").split(",")
         }
 
         Promise.all(arrayOf(buildsNumbers, goldenResults)).then { results ->
             val (buildsNumbers, goldenResults) = results
             (buildsNumbers as List<String>).forEach {
-                if (it.contains("${request.params.type}")) {
+                if (it.contains(/*"${request.params.type}"*/"12056")) {
                     // Get points for this build.
-                    measurement.select(measurement.all(), (measurement.tag("environment.machine.os") eq request.params.target) and
+                    measurement.select(measurement.all(), (measurement.tag("environment.machine.os") eq target) and
                             (measurement.field("build.number") eq FieldType.InfluxString(it))).then { dbResponse ->
                         val report = (dbResponse as List<BenchmarkMeasurement>).toReport()
-                        SummaryBenchmarksReport(report).getResultsByMetric(metric, agregation == "geomean", samples, goldenResults)
+                        report?.let {
+                            val dataForNormalization = if (normalize) {goldenResults as Map<String, Map<String, Double>>} else null
+
+                            val result = SummaryBenchmarksReport(it).getResultsByMetric(
+                                    BenchmarkResult.metricFromString(metric) ?: BenchmarkResult.Metric.EXECUTION_TIME,
+                                    agregation == "geomean", samples, dataForNormalization)
+                            response.json(result)
+                        }
+                    }.catch {
+                        response.sendStatus(400)
                     }
                 }
             }
+        }.catch {
+            response.sendStatus(400)
         }
     })
 
     router.get("/branches/:target", { request, response ->
         val measurement = BenchmarkMeasurement()
-
+        val target = request.params.target.replace('_', ' ').asDynamic()
         InfluxDBConnector.select(measurement.distinct("build.branch"),
                 measurement.field("build.branch")
-                        .select(measurement.tag("environment.machine.os") eq request.params.target)).then { dbResponse ->
+                        .select(measurement.tag("environment.machine.os") eq target)).then { dbResponse ->
             response.json(dbResponse)
         }
     })
 
     router.get("/buildsNumbers/:target", { request, response ->
         val measurement = BenchmarkMeasurement()
+        val target = request.params.target.replace('_', ' ').asDynamic()
 
         InfluxDBConnector.select(measurement.distinct("build.number"),
                 measurement.field("build.number")
-                        .select(measurement.tag("environment.machine.os") eq request.params.target)).then { dbResponse ->
+                        .select(measurement.tag("environment.machine.os") eq target)).then { dbResponse ->
             response.json(dbResponse)
         }
     })
