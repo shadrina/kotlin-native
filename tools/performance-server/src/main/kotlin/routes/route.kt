@@ -181,13 +181,14 @@ fun router() {
 
 
 
-    router.get("/metricValue/:target/:type/:branch/:metric", { request, response ->
+    router.get("/metricValue/:target/:type/:metric", { request, response ->
         val measurement = BenchmarkMeasurement()
         val metric = request.params.metric
         val target = request.params.target.toString().replace('_', ' ').asDynamic()
-        var samples:List<String>? = null
+        var samples: List<String>? = null
         var agregation = "geomean"
         var normalize = false
+        var branch: String? = null
 
         if(request.query != undefined) {
             if (request.query.samples != undefined) {
@@ -198,6 +199,9 @@ fun router() {
             }
             if (request.query.normalize != undefined) {
                 normalize = true
+            }
+            if (request.query.branch != undefined) {
+                branch = request.query.branch
             }
         }
 
@@ -211,16 +215,21 @@ fun router() {
             parsedNormalizeResults
         }
 
+        val selectExpr = branch?.let {
+            (measurement.tag("environment.machine.os") eq target) and
+                    /*(measurement.field("build.number") match ".+-${request.params.type}-.+") and*/
+                    (measurement.field("build.branch") eq FieldType.InfluxString("$branch"))
+        } ?: (measurement.tag("environment.machine.os") eq target)
+
         val buildsNumbers = InfluxDBConnector.select(measurement.distinct("build.number"),
                 measurement.field("build.number")
-                        .select((measurement.tag("environment.machine.os") eq target) and
-                                /*(measurement.field("build.number") match ".+-${request.params.type}-.+") and*/
-                                (measurement.field("build.branch") eq FieldType.InfluxString("${request.params.branch}")))).then { dbResponse ->
+                        .select(selectExpr).then { dbResponse ->
             dbResponse.toString().replace("\\[|\\]| ".toRegex(), "").split(",")
         }
 
         Promise.all(arrayOf(buildsNumbers, goldenResults)).then { results ->
             val (buildsNumbers, goldenResults) = results
+            val responseLists = listOf<List<String>>()
             (buildsNumbers as List<String>).forEach {
                 if (it.contains(/*"${request.params.type}"*/"12056")) {
                     // Get points for this build.
@@ -233,13 +242,14 @@ fun router() {
                             val result = SummaryBenchmarksReport(it).getResultsByMetric(
                                     BenchmarkResult.metricFromString(metric) ?: BenchmarkResult.Metric.EXECUTION_TIME,
                                     agregation == "geomean", samples, dataForNormalization)
-                            response.json(result)
+                            responseLists.add(result)
                         }
                     }.catch {
                         response.sendStatus(400)
                     }
                 }
             }
+            for (i in )
         }.catch {
             response.sendStatus(400)
         }
