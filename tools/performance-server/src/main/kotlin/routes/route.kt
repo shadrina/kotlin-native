@@ -192,7 +192,7 @@ fun router() {
 
         if(request.query != undefined) {
             if (request.query.samples != undefined) {
-                samples = request.query.samples.toString()?.split(",")?.map { it.trim() }
+                samples = request.query.samples.toString().split(",").map { it.trim() }
             }
             if (request.query.agr != undefined) {
                 agregation = request.query.agr.toString()
@@ -223,14 +223,13 @@ fun router() {
 
         val buildsNumbers = InfluxDBConnector.select(measurement.distinct("build.number"),
                 measurement.field("build.number")
-                        .select(selectExpr).then { dbResponse ->
+                        .select(selectExpr)).then { dbResponse ->
             dbResponse.toString().replace("\\[|\\]| ".toRegex(), "").split(",")
         }
 
         Promise.all(arrayOf(buildsNumbers, goldenResults)).then { results ->
             val (buildsNumbers, goldenResults) = results
-            val responseLists = listOf<List<String>>()
-            (buildsNumbers as List<String>).forEach {
+            val responseLists = (buildsNumbers as List<String>).map {
                 if (it.contains(/*"${request.params.type}"*/"12056")) {
                     // Get points for this build.
                     measurement.select(measurement.all(), (measurement.tag("environment.machine.os") eq target) and
@@ -242,14 +241,27 @@ fun router() {
                             val result = SummaryBenchmarksReport(it).getResultsByMetric(
                                     BenchmarkResult.metricFromString(metric) ?: BenchmarkResult.Metric.EXECUTION_TIME,
                                     agregation == "geomean", samples, dataForNormalization)
-                            responseLists.add(result)
+                            it to result
                         }
                     }.catch {
                         response.sendStatus(400)
                     }
+                } else null
+            }.filterNotNull()
+            Promise.all(responseLists.toTypedArray()).then { resultList ->
+                val results = resultList as Array<Pair<String, List<Double>>>
+                println(results)
+                val unzippedLists = mutableListOf<Collection<Any>>()
+                if (results.isNotEmpty()) {
+                    unzippedLists.add(results.map { it[0] })
+                    for (i in 0 until results.values.get(0).size) {
+                        unzippedLists.add(results.map { it[i] }.toList())
+                    }
                 }
+                response.json(unzippedLists)
+            }.catch {
+                response.sendStatus(400)
             }
-            for (i in )
         }.catch {
             response.sendStatus(400)
         }
