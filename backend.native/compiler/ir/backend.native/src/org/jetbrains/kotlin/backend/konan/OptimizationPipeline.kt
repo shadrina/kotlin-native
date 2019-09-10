@@ -55,7 +55,7 @@ private class LlvmPipelineConfiguration(context: Context) {
         KonanTarget.TVOS_X64 -> "core2"
         KonanTarget.WATCHOS_X86 -> "i386"
         KonanTarget.WATCHOS_X64 -> "core2"
-        KonanTarget.WATCHOS_ARM32 -> "generic"
+        KonanTarget.WATCHOS_ARM32 -> "cortex-a7"
         KonanTarget.LINUX_X64 -> "x86-64"
         KonanTarget.MINGW_X86 -> "pentium4"
         KonanTarget.MINGW_X64 -> "x86-64"
