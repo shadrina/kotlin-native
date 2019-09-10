@@ -278,34 +278,35 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
         }
     }
 
-    private fun <R> switchTo(irFunction: IrFunction, block: () -> R): R? {
-        val oldCodeContext = currentCodeContext
-
-        try {
-            if ((currentCodeContext as? FunctionScope)?.declaration == irFunction
-                    || (currentCodeContext as? ReturnableBlockScope)?.returnableBlock?.inlineFunctionSymbol?.owner == irFunction
-                    || (currentCodeContext as? FunctionScope)?.declaration == irFunction)
-                return block()
-            currentCodeContext = (currentCodeContext as? InnerScope)?.outerContext ?: return null
-            return switchTo(irFunction, block)
-        } finally {
-            currentCodeContext = oldCodeContext
-        }
+    private fun <T:IrElement> findCodeContext(entry: T, context:CodeContext?, predicate: CodeContext.(T) -> Boolean): CodeContext? {
+        if(context == null)
+            //TODO: replace `return null` with `throw NoContextFound()` ASAP.
+            return null
+        if (context.predicate(entry))
+            return context
+        return findCodeContext(entry, (context as? InnerScope)?.outerContext, predicate)
     }
 
-    private fun <R> switchTo(irFile: IrFile, block: () -> R): R? {
-        val oldCodeContext = currentCodeContext
 
-        try {
-            if ((currentCodeContext as? FileScope)?.file == irFile
-                    || (currentCodeContext as? ReturnableBlockScope)?.file == irFile
-                    || ((currentCodeContext as? FunctionScope)?.fileScope() as? FileScope)?.file == irFile)
+    private inline fun <R> switchTo(symbol: IrFunctionSymbol, block: () -> R): R? {
+        val functionContext = findCodeContext(symbol.owner, currentCodeContext) {
+            val declaration = (this as? FunctionScope)?.declaration
+            val returnableBlock = (this as? ReturnableBlockScope)?.returnableBlock
+            val inlinedFunction = returnableBlock?.inlineFunctionSymbol?.owner
+            declaration == it || inlinedFunction == it
+        } ?: return null
+        val fileContext = findCodeContext(symbol.owner.file, functionContext) {
+            (this as? FileScope)?.file == it
+                    || (this as? ReturnableBlockScope)?.file == it
+                    || ((this as? FunctionScope)?.declaration)?.file == it
+        } ?: return null
+        using(fileContext) {
+            using(functionContext) {
+                /* parameter and variable scopes? */
                 return block()
-            currentCodeContext = (currentCodeContext as? InnerScope)?.outerContext ?: return null
-            return switchTo(irFile, block)
-        } finally {
-            currentCodeContext = oldCodeContext
+            }
         }
+
     }
     private fun appendCAdapters() {
         context.cAdapterGenerator.generateBindings(codegen)
@@ -1231,10 +1232,8 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
             val callSiteOrigin = (it as? IrBlock)?.origin as? InlinerExpressionLocationHint
             val inlineAtFunctionSymbol = callSiteOrigin?.inlineAtSymbol as? IrFunctionSymbol
             inlineAtFunctionSymbol?.run {
-                switchTo(inlineAtFunctionSymbol.owner.file) {
-                    switchTo(inlineAtFunctionSymbol.owner) {
-                        evaluateExpression(it)
-                    }
+                switchTo(inlineAtFunctionSymbol) {
+                    evaluateExpression(it)
                 }
             } ?: evaluateExpression(it)
         }
@@ -2369,7 +2368,7 @@ internal class CodeGeneratorVisitor(val context: Context, val lifetimes: Map<IrE
     }
 }
 
-
+class NoContextFound : Throwable()
 
 internal class LocationInfo(val scope: DIScopeOpaqueRef,
                             val line: Int,
