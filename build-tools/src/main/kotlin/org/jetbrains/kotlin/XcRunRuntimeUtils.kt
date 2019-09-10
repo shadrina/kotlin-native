@@ -51,7 +51,8 @@ data class ListRuntimesReport(
 @Serializable
 data class SimulatorRuntimeDescriptor(
         val version: String,
-        val bundlePath: String,
+        // bundlePath field may not exist in the old Xcode (prior to 10.3).
+        val bundlePath: String? = null,
         val isAvailable: Boolean,
         val name: String,
         val identifier: String,
