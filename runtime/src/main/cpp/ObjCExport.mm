@@ -754,6 +754,7 @@ static const TypeInfo* createTypeInfo(
 
   result->implementedInterfaces_ = implementedInterfaces_;
   result->implementedInterfacesCount_ = implementedInterfaces.size();
+  result->interfaceTableSize_ = -1; // Mark for special handling.
 
   MethodTableRecord* openMethods_ = konanAllocArray<MethodTableRecord>(methodTable.size());
   for (int i = 0; i < methodTable.size(); ++i) openMethods_[i] = methodTable[i];

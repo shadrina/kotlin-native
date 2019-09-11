@@ -79,6 +79,13 @@ struct ExtendedTypeInfo {
   // TODO: do we want any other info here?
 };
 
+typedef void const* VTableElement;
+
+struct InterfaceTableRecord {
+    uint32_t id;
+    VTableElement const* vtable;
+};
+
 // This struct represents runtime type information and by itself is the compile time
 // constant.
 struct TypeInfo {
@@ -102,6 +109,8 @@ struct TypeInfo {
     // Null for abstract classes and interfaces.
     const MethodTableRecord* openMethods_;
     uint32_t openMethodsCount_;
+    int32_t interfaceTableSize_;
+    InterfaceTableRecord const* interfaceTable_;
 
     // String for the fully qualified dot-separated name of the package containing class,
     // or `null` if the class is local or anonymous.
@@ -128,12 +137,12 @@ struct TypeInfo {
     // vtable starts just after declared contents of the TypeInfo:
     // void* const vtable_[];
 #ifdef __cplusplus
-    inline const void* const * vtable() const {
-      return reinterpret_cast<void * const *>(this + 1);
+    inline VTableElement const* vtable() const {
+      return reinterpret_cast<VTableElement const*>(this + 1);
     }
 
-    inline const void** vtable() {
-      return reinterpret_cast<const void**>(this + 1);
+    inline VTableElement* vtable() {
+      return reinterpret_cast<VTableElement*>(this + 1);
     }
 #endif
 };
@@ -148,6 +157,9 @@ extern "C" {
 // and 'hash' numeric values and doesn't really depends on global memory state
 // (as TypeInfo is compile time constant and type info pointers are stable).
 void* LookupOpenMethod(const TypeInfo* info, MethodNameHash nameSignature) RUNTIME_CONST;
+
+InterfaceTableRecord const* SelectInterfaceTableRecord(InterfaceTableRecord const* interfaceTable,
+                                                       int interfaceTableSize, uint32_t interfaceId) RUNTIME_CONST;
 
 #ifdef __cplusplus
 } // extern "C"

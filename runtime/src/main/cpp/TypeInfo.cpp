@@ -56,4 +56,16 @@ void* LookupOpenMethod(const TypeInfo* info, MethodNameHash nameSignature) {
 
 #endif
 
+InterfaceTableRecord const* SelectInterfaceTableRecord(InterfaceTableRecord const* interfaceTable,
+                                                       int interfaceTableSize, uint32_t interfaceId) {
+  int l = 0, r = interfaceTableSize - 1;
+  while (l < r) {
+    int m = (l + r) / 2;
+    if (interfaceId < interfaceTable[m].id)
+      l = m + 1;
+    else r = m;
+  }
+  return interfaceTable + l;
+}
+
 }
