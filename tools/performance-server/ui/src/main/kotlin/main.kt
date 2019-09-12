@@ -15,7 +15,7 @@
  */
 
 import kotlin.browser.*
-import org.w3c.xhr.*
+import org.w3c.fetch.*
 import org.jetbrains.report.json.*
 import org.jetbrains.build.Build
 import kotlin.js.*
@@ -35,16 +35,13 @@ external object Chartist {
     fun Line(query: String, data: dynamic, options: dynamic): dynamic
 }
 
-fun sendGetRequest(url: String) : String {
-    val request = XMLHttpRequest()
-
-    request.open("GET", url, false)
-    request.send()
-    if (request.status == 200.toShort()) {
-        return request.responseText
+fun sendGetRequest(url: String) = window.fetch(url, RequestInit("GET")).then { response ->
+        if (!response.ok)
+            error("Error during getting response from $url\n" +
+                    "${response}")
+        else
+            response.text()
     }
-    error("Request to $url has status ${request.status}")
-}
 
 // Parse description with values for metrics.
 fun <T : Any> separateValues(values: String, valuesContainer: MutableMap<String, MutableList<T?>>, convert: (String) -> T = { it as T }) {
@@ -226,7 +223,7 @@ var stageToShow = 0
 var buildsNumberToShow: Int? = null
 
 fun main(args: Array<String>) {
-    val serverUrl = "https://kotlin-native-perf-summary.labs.jb.gg"
+    val serverUrl = "http://localhost:3000"//"https://kotlin-native-perf-summary.labs.jb.gg"
     buildsNumberToShow = null
     stageToShow = 0
     val zoomRatio = 3
@@ -243,42 +240,47 @@ fun main(args: Array<String>) {
         }
     }
 
-    // Get builds.
-    val buildsUrl = buildString {
-        append("$serverUrl/builds")
-        append("/${parameters["target"]}")
-        append("/${parameters["type"]}")
-        append("/${parameters["branch"]}")
-        append("/${parameters["build"]}")
-    }
-    val response = sendGetRequest(buildsUrl)
-
-    val data = JsonTreeParser.parse(response)
-    if (data !is JsonArray) {
-        error("Response is expected to be an array.")
-    }
-    val builds = data.jsonArray.map { Build.create(it as JsonObject) }
-            .sortedWith(compareBy ( { it.buildNumber.substringBefore(".").toInt() },
-                    { it.buildNumber.substringAfter(".").substringBefore("-").toDouble() },
-                    { it.buildNumber.substringAfterLast("-").toInt() }))
-
+    // Get branches.
     val branchesUrl = "$serverUrl/branches/${parameters["target"]}"
+    sendGetRequest(branchesUrl).then { response ->
+        val branches: Array<String> = JSON.parse(response)
+        println(branches)
+        val releaseBranches = branches.filter { "^v\\d+\\.\\d+\\.\\d+-fixes$".toRegex().find(it) != null }
+        // Add release branches to selector.
+        releaseBranches.forEach {
+            val option = Option(it, it)
+            js("$('#inputGroupBranch')").append(js("$(option)"))
+        }
+    }
 
-    val branches: Array<String> = JSON.parse(sendGetRequest(branchesUrl))
-    val releaseBranches = branches.filter { "^v\\d+\\.\\d+\\.\\d+-fixes$".toRegex().find(it) != null }
 
-    // Fill autocomplete list.
+    // Fill autocomplete list with build numbers.
     val buildsNumbersUrl = "$serverUrl/buildsNumbers/${parameters["target"]}"
-    val buildsNumbers: Array<String> = JSON.parse(sendGetRequest(buildsNumbersUrl))
-
-    // Add release branches to selector.
-    releaseBranches.forEach {
-        val option = Option(it, it)
-        js("$('#inputGroupBranch')").append(js("$(option)"))
+    sendGetRequest(buildsNumbersUrl).then { response ->
+        val buildsNumbers: Array<String> = JSON.parse(response)
+        println(buildsNumbers)
+        val autocompleteParameters: dynamic = object{}
+        autocompleteParameters["lookup"] = buildsNumbers
+        autocompleteParameters["onSelect"] = { suggestion ->
+            if (suggestion.value != parameters["build"]) {
+                val newLink = "http://${window.location.host}/?target=${parameters["target"]}&type=${parameters["type"]}" +
+                        "${if ((suggestion.value as String).isEmpty()) "" else "&build=${suggestion.value}"}"
+                window.location.href = newLink
+            }
+        }
+        js("$( \"#highligted_build\" )").autocomplete(autocompleteParameters)
+        js("$('#highligted_build')").change({ value ->
+            val newValue = js("$(this).val()").toString()
+            if (newValue.isEmpty() || newValue in buildsNumbers) {
+                val newLink = "http://${window.location.host}/?target=${parameters["target"]}&type=${parameters["type"]}" +
+                        "${if (newValue.isEmpty()) "" else "&build=$newValue"}"
+                window.location.href = newLink
+            }
+        })
     }
 
     // Change inputs values connected with parameters and add events listeners.
-    document.querySelector("#inputGroupTarget [value=\"${parameters["target"]}\"]")?.setAttribute("selected", "true")
+    document.querySelector("#inputGroupTarget [value=\"${parameters["target"]?.replace('_', ' ')}\"]")?.setAttribute("selected", "true")
     document.querySelector("#inputGroupBuildType [value=\"${parameters["type"]}\"]")?.setAttribute("selected", "true")
     document.querySelector("#inputGroupBranch [value=\"${parameters["branch"]}\"]")?.setAttribute("selected", "true")
     (document.getElementById("highligted_build") as HTMLInputElement).value = parameters["build"]!!
@@ -286,8 +288,8 @@ fun main(args: Array<String>) {
     // Add onChange events for fields.
     js("$('#inputGroupTarget')").change({
         val newValue = js("$(this).val()")
-        if (newValue != parameters["target"]) {
-            val newLink = "http://${window.location.host}/?target=$newValue&type=${parameters["type"]}&branch=${parameters["branch"]}" +
+        if (newValue != parameters["target"]?.replace('_', ' ')) {
+            val newLink = "http://${window.location.host}/?target=${newValue.replace(' ', '_')}&type=${parameters["type"]}&branch=${parameters["branch"]}" +
                     "${if (parameters["build"]!!.isEmpty()) "" else "&build=${parameters["build"]}"}"
             window.location.href = newLink
         }
@@ -309,34 +311,76 @@ fun main(args: Array<String>) {
         }
     })
 
-    val autocompleteParameters: dynamic = object{}
-    autocompleteParameters["lookup"] = buildsNumbers
-    autocompleteParameters["onSelect"] = { suggestion ->
-        if (suggestion.value != parameters["build"]) {
-            val newLink = "http://${window.location.host}/?target=${parameters["target"]}&type=${parameters["type"]}" +
-                    "${if ((suggestion.value as String).isEmpty()) "" else "&build=${suggestion.value}"}"
-            window.location.href = newLink
+    // Collect information for charts library.
+    val valuesToShow = mapOf("COMPILE_TIME" to mapOf(
+                "samples" to "HelloWorld,Videoplayer${if (parameters["target"] == "Mac_OS_X") ",FrameworkBenchmarksAnalyzer" else ""}",
+                "agr" to "samples"
+            ),
+            "EXECUTION_TIME" to mapOf(
+                    "normalize" to "true"
+            ),
+            "CODE_SIZE" to mapOf(
+                    "normalize" to "true",
+                    "samples" to "all${if (parameters["target"] == "Mac_OS_X") ",FrameworkBenchmarksAnalyzer" else ""}"),
+            "BUNDLE_SIZE" to mapOf()
+    )
+
+    val sizeClassNames = arrayOf("ct-series-d", "ct-series-e")
+
+    // Draw charts.
+    var execChart = null
+    var compileChart = null
+    var codeSizeChart = null
+    var bundleSizeChart = null
+
+    val metricUrl = "$serverUrl/metricValue/${parameters["target"]}/${parameters["type"]}/"
+    valuesToShow.forEach { (metric, settings) ->
+        val getParameters = with(StringBuilder()) {
+            if (settings.isNotEmpty()) {
+                append("?")
+            }
+            var prefix = ""
+            settings.forEach { (key, value) ->
+                append("$prefix$key=$value")
+                prefix = "&"
+            }
+            toString()
+        }
+
+        val url = "$metricUrl$metric$getParameters${ 
+            if (parameters["branch"] != "all") 
+                (if (getParameters.isEmpty()) "?" else "&") + "branch${parameters["branch"]}"
+            else ""
+        }"
+
+        sendGetRequest(url).then { response ->
+            val results = response.toString().split("],[").map {
+                it.replace("\\]|\\[".toRegex(), "").split(',')
+            }
+            val labels = results[0].map { it.replace("\"", "") }
+            val values = results.drop(1)
+            when (metric) {
+                "COMPILE_TIME" -> compileChart = Chartist.Line("#compile_chart",
+                        getChartData(labels, values.map { it.toDouble() / 1000 }, stageToShow, buildsNumberToShow),
+                        getChartOptions(settings["samples"]!!.split(',').toTypedArray(), "Time, milliseconds"))
+                "EXECUTION_TIME" ->  execChart = Chartist.Line("#exec_chart",
+                        getChartData(labels, values.map { it.toDouble() }, stageToShow, buildsNumberToShow),
+                        getChartOptions(arrayOf("Geometric Mean"), "Normalized time"))
+                "CODE_SIZE" -> codeSizeChart = Chartist.Line("#codesize_chart",
+                        getChartData(labels, values.map { it.toDouble() }, stageToShow, buildsNumberToShow, sizeClassNames),
+                        getChartOptions(arrayOf("Geometric Mean") +
+                                if (parameters["target"] == "Mac_OS_X") arrayOf("FrameworkBenchmarksAnalyzer") else arrayOf(),
+                                "Normalized size",
+                                arrayOf("ct-series-3", "ct-series-4")))
+                "BUNDLE_SIZE" -> bundleSizeChart = Chartist.Line("#bundlesize_chart",
+                        getChartData(labels, values.map { it.toInt() / 1024 / 1024 }, stageToShow, buildsNumberToShow, sizeClassNames),
+                    getChartOptions(arrayOf("Bundle size"), "Size, MB", arrayOf("ct-series-3")))
+                else -> error("No chart for metric $metric")
+            }
         }
     }
-    js("$( \"#highligted_build\" )").autocomplete(autocompleteParameters)
-    js("$('#highligted_build')").change({ value ->
-        val newValue = js("$(this).val()").toString()
-        if (newValue.isEmpty() || newValue in builds.map {it.buildNumber}) {
-            val newLink = "http://${window.location.host}/?target=${parameters["target"]}&type=${parameters["type"]}" +
-                    "${if (newValue.isEmpty()) "" else "&build=$newValue"}"
-            window.location.href = newLink
-        }
-    })
 
-
-    // Collect information for charts library.
-    val labels = mutableListOf<String>()
-    val executionTime = mutableMapOf<String, MutableList<Double?>>()
-    val compileTime = mutableMapOf<String, MutableList<Double?>>()
-    val codeSize = mutableMapOf<String, MutableList<Double?>>()
-    val bundleSize = mutableListOf<Int?>()
-
-    builds.forEach {
+    /*builds.forEach {
         // Choose labels on x axis.
         if (parameters["type"] == "day") {
             labels.add(it.date)
@@ -348,18 +392,6 @@ fun main(args: Array<String>) {
         separateValues(it.codeSize, codeSize) { value -> value.toDouble() }
         bundleSize.add(it.bundleSize?.toInt()?. let { it / 1024 / 1024 })
     }
-
-    val sizeClassNames = arrayOf("ct-series-d", "ct-series-e")
-
-    // Draw charts.
-    val execChart = Chartist.Line("#exec_chart", getChartData(labels, executionTime.values, stageToShow, buildsNumberToShow),
-            getChartOptions(executionTime.keys.toTypedArray(), "Normalized time"))
-    val compileChart = Chartist.Line("#compile_chart", getChartData(labels, compileTime.values, stageToShow, buildsNumberToShow),
-            getChartOptions(compileTime.keys.toTypedArray(), "Time, milliseconds"))
-    val codeSizeChart = Chartist.Line("#codesize_chart", getChartData(labels, codeSize.values, stageToShow, buildsNumberToShow, sizeClassNames),
-            getChartOptions(codeSize.keys.toTypedArray(), "Normalized size", arrayOf("ct-series-3", "ct-series-4")))
-    val bundleSizeChart = Chartist.Line("#bundlesize_chart", getChartData(labels, listOf(bundleSize), stageToShow, buildsNumberToShow, sizeClassNames),
-            getChartOptions(arrayOf("Bundle size"), "Size, MB", arrayOf("ct-series-3")))
 
     // Tooltips and higlights.
     customizeChart(execChart, "exec_chart", js("$(\"#exec_chart\")"), builds, parameters)
@@ -412,7 +444,7 @@ fun main(args: Array<String>) {
             stageToShow++
         }
         updateAllCharts()
-    })
+    })*/
 
     // Auto reload.
     parameters["refresh"]?.let {

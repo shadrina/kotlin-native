@@ -179,8 +179,6 @@ fun router() {
         response.json(prepareBuildsResponse(builds, request.params.type, request.params.branch))
     })*/
 
-
-
     router.get("/metricValue/:target/:type/:metric", { request, response ->
         val measurement = BenchmarkMeasurement()
         val metric = request.params.metric
@@ -229,16 +227,28 @@ fun router() {
 
         Promise.all(arrayOf(buildsNumbers, goldenResults)).then { results ->
             val (buildsNumbers, goldenResults) = results
-            val responseLists = (buildsNumbers as List<String>).map {
+            val responseLists = (buildsNumbers as List<String>).sortedWith(compareBy ( { it.substringBefore(".").toInt() },
+                    { it.substringAfter(".").substringBefore("-").toDouble() },
+                    { it.substringAfterLast("-").toInt() })).map {
                 if (it.contains(/*"${request.params.type}"*/"12056")) {
                     // Get points for this build.
                     measurement.select(measurement.all(), (measurement.tag("environment.machine.os") eq target) and
                             (measurement.field("build.number") eq FieldType.InfluxString(it))).then { dbResponse ->
                         val report = (dbResponse as List<BenchmarkMeasurement>).toReport()
-                        report?.let {
+                        report?.let { report ->
                             val dataForNormalization = if (normalize) {goldenResults as Map<String, Map<String, Double>>} else null
-
-                            val result = SummaryBenchmarksReport(it).getResultsByMetric(
+                            val summaryReport = SummaryBenchmarksReport(report)
+                            val result = if (samples != null && samples.contains("all")) {
+                                val changedSamples = samples.toMutableList()
+                                changedSamples.remove("all")
+                                summaryReport.getResultsByMetric(
+                                        BenchmarkResult.metricFromString(metric) ?: BenchmarkResult.Metric.EXECUTION_TIME,
+                                        agregation == "geomean", null, dataForNormalization) + if (changedSamples.isNotEmpty()) {
+                                    summaryReport.getResultsByMetric(
+                                        BenchmarkResult.metricFromString(metric) ?: BenchmarkResult.Metric.EXECUTION_TIME,
+                                        agregation == "geomean", changedSamples, dataForNormalization)
+                                } else listOf()
+                            } else summaryReport.getResultsByMetric(
                                     BenchmarkResult.metricFromString(metric) ?: BenchmarkResult.Metric.EXECUTION_TIME,
                                     agregation == "geomean", samples, dataForNormalization)
                             it to result
@@ -248,14 +258,15 @@ fun router() {
                     }
                 } else null
             }.filterNotNull()
+
             Promise.all(responseLists.toTypedArray()).then { resultList ->
                 val results = resultList as Array<Pair<String, List<Double>>>
-                println(results)
                 val unzippedLists = mutableListOf<Collection<Any>>()
                 if (results.isNotEmpty()) {
-                    unzippedLists.add(results.map { it[0] })
-                    for (i in 0 until results.values.get(0).size) {
-                        unzippedLists.add(results.map { it[i] }.toList())
+                    // Get list of all buildNumbers.
+                    unzippedLists.add(results.map { it.first })
+                    for (i in 0 until results[0].second.size) {
+                        unzippedLists.add(results.map { it.second[i] }.toList())
                     }
                 }
                 response.json(unzippedLists)
@@ -269,7 +280,7 @@ fun router() {
 
     router.get("/branches/:target", { request, response ->
         val measurement = BenchmarkMeasurement()
-        val target = request.params.target.replace('_', ' ').asDynamic()
+        val target = request.params.target.toString().replace('_', ' ').asDynamic()
         InfluxDBConnector.select(measurement.distinct("build.branch"),
                 measurement.field("build.branch")
                         .select(measurement.tag("environment.machine.os") eq target)).then { dbResponse ->
@@ -279,7 +290,7 @@ fun router() {
 
     router.get("/buildsNumbers/:target", { request, response ->
         val measurement = BenchmarkMeasurement()
-        val target = request.params.target.replace('_', ' ').asDynamic()
+        val target = request.params.target.toString().replace('_', ' ').asDynamic()
 
         InfluxDBConnector.select(measurement.distinct("build.number"),
                 measurement.field("build.number")
