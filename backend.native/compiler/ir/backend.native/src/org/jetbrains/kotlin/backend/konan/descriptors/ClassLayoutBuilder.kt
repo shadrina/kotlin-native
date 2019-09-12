@@ -449,8 +449,7 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
     private val IrClass.sortedOverridableOrOverridingMethods: List<IrSimpleFunction>
         get() =
             this.simpleFunctions()
-                    .filter { (it.isOverridable || it.overriddenSymbols.isNotEmpty())
-                               && it.bridgeTarget == null }
+                    .filter { it.isOverridableOrOverrides && it.bridgeTarget == null }
                     .sortedBy { it.uniqueId }
 
     private val functionIds = mutableMapOf<IrFunction, Long>()
