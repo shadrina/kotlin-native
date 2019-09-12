@@ -226,20 +226,29 @@ internal class RTTIGenerator(override val context: Context) : ContextUtils {
         // The details are in ClassLayoutBuilder.
         val (interfaceTable, interfaceTableSize) = if (!needInterfaceTable) Pair(null, 0) else {
             val interfaceLayouts = implementedInterfaces.map { context.getLayoutBuilder(it) }
-            val maxInterfaceColor = interfaceLayouts.map { it.hierarchyInfo.interfaceColor }.max() ?: 0
+            val interfaceColors = interfaceLayouts.map { it.hierarchyInfo.interfaceColor }
 
-            fun tableSize(x: Int): Int {
-                var result = 0
-                var x = x
-                while (x > 0) {
-                    ++result
-                    x /= 2
+            // Find the optimal size. It must be a power of 2.
+            var size = 1
+            val maxSize = 1 shl ClassGlobalHierarchyInfo.MAX_BITS_PER_COLOR
+            val used = BooleanArray(maxSize)
+            while (size <= maxSize) {
+                for (i in 0 until size)
+                    used[i] = false
+                // Check for collisions.
+                var ok = true
+                for (color in interfaceColors) {
+                    val index = color % size
+                    if (used[index]) {
+                        ok = false
+                        break
+                    }
+                    used[index] = true
                 }
-                return 1 shl result
+                if (ok) break
+                size *= 2
             }
-
-            val size = tableSize(maxInterfaceColor)
-            val conservative = size > (1 shl ClassGlobalHierarchyInfo.MAX_BITS_PER_COLOR)
+            val conservative = size > maxSize
 
             val interfaceTableSkeleton = if (conservative)
                 interfaceLayouts.sortedBy { it.hierarchyInfo.interfaceId }.toTypedArray()
