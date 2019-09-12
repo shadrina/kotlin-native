@@ -744,8 +744,9 @@ internal class FunctionGenerationContext(val function: LLVMValueRef,
             positionAtEnd(takeResBB)
             val resultPhi = phi(resultType)
             appendingTo(fastPathBB) {
-                addPhiIncoming(resultPhi, fastPathBB to fastPath())
+                val fastValue = fastPath()
                 br(takeResBB)
+                addPhiIncoming(resultPhi, currentBlock to fastValue)
             }
             appendingTo(slowPathBB) {
                 val slowValue = if (dynamicTypeInfoIsPossible) {
@@ -757,8 +758,8 @@ internal class FunctionGenerationContext(val function: LLVMValueRef,
                             listOf(interfaceTable, actualInterfaceTableSize, Int32(interfaceId).llvm))
                     onSuccess(interfaceTableRecord)
                 }
-                addPhiIncoming(resultPhi, slowPathBB to slowValue)
                 br(takeResBB)
+                addPhiIncoming(resultPhi, currentBlock to slowValue)
             }
             resultPhi
         }

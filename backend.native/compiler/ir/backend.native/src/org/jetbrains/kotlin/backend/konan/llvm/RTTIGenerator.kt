@@ -244,10 +244,8 @@ internal class RTTIGenerator(override val context: Context) : ContextUtils {
             val interfaceTableSkeleton = if (conservative)
                 interfaceLayouts.sortedBy { it.hierarchyInfo.interfaceId }.toTypedArray()
             else arrayOfNulls<ClassLayoutBuilder?>(size).also {
-                for (implementedInterface in implementedInterfaces) {
-                    val layoutBuilder = context.getLayoutBuilder(implementedInterface)
-                    it[layoutBuilder.hierarchyInfo.interfaceId % size] = layoutBuilder
-                }
+                for (interfaceLayout in interfaceLayouts)
+                    it[interfaceLayout.hierarchyInfo.interfaceId % size] = interfaceLayout
             }
 
             val methodTableEntries = context.getLayoutBuilder(irClass).methodTableEntries
@@ -269,10 +267,9 @@ internal class RTTIGenerator(override val context: Context) : ContextUtils {
                                 else impl.entryPointAddress
                             }
 
-                            val interfaceVTable = staticData.placeGlobalArray("kifacevtable:${className}_$interfaceId",
-                                    kInt8Ptr, if (vtableEntries.isEmpty()) listOf(NullPointer(int8Type)) else vtableEntries
+                            staticData.placeGlobalConstArray("kifacevtable:${className}_$interfaceId",
+                                    kInt8Ptr, vtableEntries
                             )
-                            interfaceVTable.pointer.getElementPtr(0)
                         }
                 )
             }
@@ -482,10 +479,10 @@ internal class RTTIGenerator(override val context: Context) : ContextUtils {
             val interfaceVTable = staticData.placeGlobalArray("", kInt8Ptr, vtableEntries)
             staticData.placeGlobalConstArray("",
                     runtime.interfaceTableRecordType, listOf(
-                InterfaceTableRecord(
-                        Int32(layoutBuilder.hierarchyInfo.interfaceId),
-                        interfaceVTable.pointer.getElementPtr(0)
-                )
+                    InterfaceTableRecord(
+                            Int32(layoutBuilder.hierarchyInfo.interfaceId),
+                            interfaceVTable.pointer.getElementPtr(0)
+                    )
             ))
         }
 

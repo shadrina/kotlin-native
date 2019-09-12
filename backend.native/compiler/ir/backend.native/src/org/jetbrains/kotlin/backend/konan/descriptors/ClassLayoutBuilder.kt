@@ -20,7 +20,6 @@ import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.name.FqName
-import java.util.*
 
 internal class OverriddenFunctionInfo(
         val function: IrSimpleFunction,
@@ -125,6 +124,7 @@ internal class GlobalHierarchyAnalysis(val context: Context) {
             x /= 2
         }
 
+        val maxInterfaceId = Int.MAX_VALUE shr bitsPerColor
         val colorCounts = IntArray(maxColor + 1)
 
         /*
@@ -150,7 +150,11 @@ internal class GlobalHierarchyAnalysis(val context: Context) {
             override fun visitClass(declaration: IrClass) {
                 if (declaration.isInterface) {
                     val color = interfaceColors[declaration]!!
+                    // Numerate from 1 (reserve 0 for invalid value).
                     val interfaceId = ++colorCounts[color]
+                    assert (interfaceId <= maxInterfaceId) {
+                        "Unable to assign interface id to ${declaration.name}"
+                    }
                     context.getLayoutBuilder(declaration).hierarchyInfo =
                             ClassGlobalHierarchyInfo(0, 0,
                                     color or (interfaceId shl bitsPerColor), color)
@@ -181,7 +185,7 @@ internal class GlobalHierarchyAnalysis(val context: Context) {
         context.globalHierarchyAnalysisResult = GlobalHierarchyAnalysisResult(bitsPerColor)
     }
 
-    class InterfacesForbiddennessGraph(val nodes: List<IrClass>, val forbidden: List<IntArray>) {
+    class InterfacesForbiddennessGraph(val nodes: List<IrClass>, val forbidden: List<List<Int>>) {
 
         fun computeColoringGreedy(): IntArray {
             val colors = IntArray(nodes.size) { -1 }
@@ -201,7 +205,7 @@ internal class GlobalHierarchyAnalysis(val context: Context) {
                         break
                     }
                 if (!found)
-                    colors[v] = ++numberOfColors
+                    colors[v] = numberOfColors++
             }
             return colors
         }
@@ -210,49 +214,38 @@ internal class GlobalHierarchyAnalysis(val context: Context) {
             fun build(irModuleFragment: IrModuleFragment): InterfacesForbiddennessGraph {
                 val interfaceIndices = mutableMapOf<IrClass, Int>()
                 val interfaces = mutableListOf<IrClass>()
-                var index = 0
-                val forbidden = mutableListOf<BitSet>()
+                val forbidden = mutableListOf<MutableList<Int>>()
                 irModuleFragment.acceptVoid(object : IrElementVisitorVoid {
                     override fun visitElement(element: IrElement) {
                         element.acceptChildrenVoid(this)
                     }
 
+                    fun registerInterface(iface: IrClass) {
+                        interfaceIndices.getOrPut(iface) {
+                            forbidden.add(mutableListOf())
+                            interfaces.add(iface)
+                            interfaces.size - 1
+                        }
+                    }
+
                     override fun visitClass(declaration: IrClass) {
                         if (declaration.isInterface)
-                            interfaceIndices.getOrPut(declaration) {
-                                forbidden.add(BitSet())
-                                interfaces.add(declaration)
-                                index++
-                            }
+                            registerInterface(declaration)
                         else {
                             val implementedInterfaces = declaration.implementedInterfaces
-                            implementedInterfaces.forEach {
-                                interfaceIndices.getOrPut(it) {
-                                    forbidden.add(BitSet())
-                                    interfaces.add(it)
-                                    index++
-                                }
-                            }
+                            implementedInterfaces.forEach { registerInterface(it) }
                             for (i in 0 until implementedInterfaces.size)
                                 for (j in i + 1 until implementedInterfaces.size) {
                                     val v = interfaceIndices[implementedInterfaces[i]]!!
                                     val u = interfaceIndices[implementedInterfaces[j]]!!
-                                    forbidden[v].set(u)
-                                    forbidden[u].set(v)
+                                    forbidden[v].add(u)
+                                    forbidden[u].add(v)
                                 }
                         }
                         super.visitClass(declaration)
                     }
                 })
-                return InterfacesForbiddennessGraph(interfaces, forbidden.map {
-                    val array = IntArray(it.cardinality())
-                    var setBit = it.nextSetBit(0)
-                    for (i in array.indices) {
-                        array[i] = setBit
-                        setBit = it.nextSetBit(setBit + 1)
-                    }
-                    array
-                })
+                return InterfacesForbiddennessGraph(interfaces, forbidden)
             }
         }
     }
