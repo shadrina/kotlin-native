@@ -359,12 +359,10 @@ internal class ClassLayoutBuilder(val irClass: IrClass, val context: Context) {
     }
 
     val interfaceTableEntries: List<IrSimpleFunction> by lazy {
-        irClass.simpleFunctions()
-                .filter { it.isOverridable && it.bridgeTarget == null }
+        irClass.sortedOverridableOrOverridingMethods
                 .filter { f ->
                     f.isReal || f.overriddenSymbols.any { OverriddenFunctionInfo(f, it.owner).needBridge }
                 }
-                .sortedBy { it.functionName.localHash.value }
                 .toList()
     }
 

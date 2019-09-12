@@ -250,6 +250,8 @@ internal class RTTIGenerator(override val context: Context) : ContextUtils {
                 }
             }
 
+            val methodTableEntries = context.getLayoutBuilder(irClass).methodTableEntries
+
             val interfaceTableEntries = interfaceTableSkeleton.map { iface ->
                 val interfaceId = iface?.hierarchyInfo?.interfaceId ?: 0
                 InterfaceTableRecord(
@@ -259,7 +261,7 @@ internal class RTTIGenerator(override val context: Context) : ContextUtils {
                         else {
                             val vtableEntries = iface.interfaceTableEntries.map { ifaceFunction ->
                                 val impl = OverriddenFunctionInfo(
-                                        irClass.simpleFunctions().single { ifaceFunction in it.allOverriddenFunctions },
+                                        methodTableEntries.first { ifaceFunction in it.function.allOverriddenFunctions }.function,
                                         ifaceFunction
                                 ).implementation
                                 if (impl == null || context.referencedFunctions?.contains(impl) == false)
