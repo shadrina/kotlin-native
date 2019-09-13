@@ -48,10 +48,7 @@ class DarwinX64AbiInfo : ObjCAbiInfo {
 
 class DarwinX86AbiInfo : ObjCAbiInfo {
     override fun shouldUseStret(returnType: Type): Boolean {
-        // See: https://developer.apple.com/library/archive/documentation/DeveloperTools/Conceptual/LowLevelABI/130-IA-32_Function_Calling_Conventions/IA32.html#//apple_ref/doc/uid/TP40002492-SW5
-        // Structures 1 or 2 bytes in size are placed in EAX.
-        // Structures 4 or 8 bytes in size are placed in: EAX and EDX.
-        // Structures of other sizes are placed at the address supplied by the caller.
+        // https://github.com/llvm/llvm-project/blob/6c8a34ed9b49704bdd60838143047c62ba9f2502/clang/lib/CodeGen/TargetInfo.cpp#L1243
         return when (returnType) {
             is RecordType -> {
                 val size = returnType.decl.def!!.size
@@ -73,7 +70,7 @@ class DarwinArm32AbiInfo(private val target: KonanTarget) : ObjCAbiInfo {
         // uses AAPCS16 VPF.
         KonanTarget.WATCHOS_ARM32 -> when (returnType) {
             is RecordType -> {
-                // https://github.com/llvm/llvm-project/blob/6c8a34ed9b49704bdd60838143047c62ba9f2502/clang/lib/CodeGen/TargetInfo.cpp#L6306
+                // https://github.com/llvm/llvm-project/blob/6c8a34ed9b49704bdd60838143047c62ba9f2502/clang/lib/CodeGen/TargetInfo.cpp#L6165
                 when {
                     returnType.decl.def!!.size <= 16 -> false
                     else -> true
