@@ -123,6 +123,8 @@ private class IrFunctionRegionsCollector(
                     visitInFileContext(file) {
                         visitInStatementContext(statements)
                     }
+                } else {
+                    visitInStatementContext(statements)
                 }
             }
             else -> visitInStatementContext(statements)
@@ -178,6 +180,29 @@ private class IrFunctionRegionsCollector(
         val nextRegion = recordRegion(next, expression.endOffset, currentRegion.endOffset) ?: return
         regionStack.pop()
         regionStack.push(nextRegion)
+    }
+
+    override fun visitTry(aTry: IrTry) {
+        val result = aTry.tryResult
+        if (result is IrReturn) {
+            recordRegion(result.value)
+            result.value.acceptVoid(this)
+        } else {
+            result.acceptVoid(this)
+        }
+        aTry.catches.forEach { it.acceptVoid(this) }
+    }
+
+    override fun visitCatch(aCatch: IrCatch) {
+        when (val result = aCatch.result) {
+            is IrReturn -> {
+                recordRegion(result.value)
+                result.value.acceptVoid(this)
+            }
+            is IrBlock -> {
+                result.statements.firstOrNull()?.acceptVoid(this)
+            }
+        }
     }
 
     private fun visitInFileContext(file: IrFile, visit: () -> Unit) {
